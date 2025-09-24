@@ -18,7 +18,8 @@ module.exports = async (req, res) => {
   }
 
   try {
-    await bot.handleUpdate(req.body, res);
+    console.log('Received update:', JSON.stringify(req.body));
+    await bot.handleUpdate(req.body);
     res.status(200).send('ok');
   } catch (err) {
     console.error('Failed to handle update', err);
