@@ -51,9 +51,9 @@ function setTaskReminder(userId, taskIndex, intervalMs, ctx, label) {
   if (!task) return;
   // Очистити існуючий
   if (task.reminderId) clearInterval(task.reminderId);
-  // set next run timestamp
-  task.reminderNext = Date.now() + intervalMs;
   task.reminderInterval = intervalMs;
+  // schedule next expected run (timestamp)
+  task.reminderNext = Date.now() + intervalMs;
   if (label) task.reminderLabel = label;
   // reminderLabel will be set by caller when possible
   task.reminderId = setInterval(() => {
@@ -67,7 +67,7 @@ function setTaskReminder(userId, taskIndex, intervalMs, ctx, label) {
         ]]
       }
     });
-    // schedule next
+    // update next expected
     task.reminderNext = Date.now() + intervalMs;
   }, intervalMs);
 }
@@ -116,66 +116,6 @@ const timerOptions = [
   { label: "Оберіть годину", value: "pick_hour" },
   { label: "Щодня", value: 24 * 60 * 60 * 1000 }
 ];
-
-// Process due reminders: send any reminders that are past due (useful when timers missed)
-async function processDueReminders(ctx) {
-  try {
-    const now = Date.now();
-    const fromId = ctx && ctx.from ? ctx.from.id : null;
-    // iterate all users
-    for (const [userIdStr, user] of Object.entries(userTasks)) {
-      const userId = parseInt(userIdStr, 10);
-      if (!user || !user.tasks) continue;
-      user.tasks.forEach((task, idx) => {
-        if (!task) return;
-        // skip completed
-        if (user.completed && user.completed[idx]) return;
-        // interval reminders
-        if (task.reminderInterval && task.reminderNext && now >= task.reminderNext) {
-          // send reminder
-          try {
-            bot.telegram.sendMessage(userId, `🔔 Нагадування: ${getTaskText(task)}\n\nБільше функцій — /help`, {
-              reply_markup: { inline_keyboard: [[{ text: '✅ Позначити як виконане', callback_data: `task_action:complete:${idx}` }, { text: '⏸️ Зупинити нагадування', callback_data: `task_action:stop:${idx}` }, { text: '🔁 Нагадувати далі', callback_data: `task_action:keep:${idx}` }]] }
-            });
-          } catch (e) {
-            console.error('failed to send due reminder', e);
-          }
-          // advance next
-          task.reminderNext = now + (task.reminderInterval || 0);
-        }
-        // daily scheduled reminders (reminderSchedule.type === 'daily_hour')
-        if (task.reminderSchedule && task.reminderSchedule.type === 'daily_hour') {
-          // compute next occurrence timestamp for given hour
-          const h = task.reminderSchedule.hour;
-          const next = new Date();
-          next.setHours(h, 0, 0, 0);
-          if (next.getTime() <= now) next.setDate(next.getDate() + 1);
-          const nextTs = next.getTime();
-          if (!task.reminderNext) task.reminderNext = nextTs;
-          if (now >= task.reminderNext) {
-            try {
-              bot.telegram.sendMessage(userId, `🔔 Нагадування: ${getTaskText(task)}\n\nБільше функцій — /help`, {
-                reply_markup: { inline_keyboard: [[{ text: '✅ Позначити як виконане', callback_data: `task_action:complete:${idx}` }, { text: '⏸️ Зупинити нагадування', callback_data: `task_action:stop:${idx}` }, { text: '🔁 Нагадувати далі', callback_data: `task_action:keep:${idx}` }]] }
-              });
-            } catch (e) { console.error('failed to send due daily reminder', e); }
-            // schedule next day
-            const nextDay = new Date(task.reminderNext);
-            nextDay.setDate(nextDay.getDate() + 1);
-            task.reminderNext = nextDay.getTime();
-          }
-        }
-      });
-    }
-  } catch (err) {
-    console.error('processDueReminders err', err);
-  }
-}
-
-// register middleware to process due reminders on each incoming update
-bot.use(async (ctx, next) => {
-  await processDueReminders(ctx);
-  return next();
-});
 
 function withFooter(text) {
   const footer = "\n\nБільше функцій — /help";
@@ -574,6 +514,8 @@ bot.action(/pick_global_hour:(\d+)/, async (ctx) => {
         }
       }, 24 * 60 * 60 * 1000);
     }, msUntil);
+  // store next run timestamp to support serverless scheduled checks
+  ut.nextRun = next.getTime();
     await ctx.editMessageReplyMarkup();
     await ctx.reply(withFooter(`Глобальний таймер щоденно о ${hour.toString().padStart(2,'0')}:00 встановлено.`));
     await ctx.answerCbQuery('Година встановлена');
@@ -625,16 +567,15 @@ bot.action(/pick_hour:(\d+):(\d+)/, async (ctx) => {
     const task = user.tasks[taskIdx];
     // clear existing
     clearTaskReminder(task);
-  task.reminderLabel = `${hour.toString().padStart(2, '0')}:00 (щодня)`;
+    // compute ms until next occurrence of given hour
+    const now = new Date();
+    const next = new Date(now);
+    next.setHours(hour, 0, 0, 0);
+    if (next <= now) next.setDate(next.getDate() + 1);
+    const msUntil = next - now;
+    task.reminderLabel = `${hour.toString().padStart(2, '0')}:00 (щодня)`;
     task.reminderSchedule = { type: 'daily_hour', hour };
-  // set a timeout for first occurrence, then interval every 24h
-  // compute ms until next occurrence of given hour
-  const nowDate = new Date();
-  const nextDate = new Date(nowDate);
-  nextDate.setHours(hour, 0, 0, 0);
-  if (nextDate <= nowDate) nextDate.setDate(nextDate.getDate() + 1);
-  const msUntil = nextDate - nowDate;
-  task.reminderNext = nextDate.getTime();
+    // set a timeout for first occurrence, then interval every 24h
     task.reminderTimeoutId = setTimeout(() => {
       ctx.telegram.sendMessage(userId, `🔔 Нагадування: ${getTaskText(task)}\n\nБільше функцій — /help`, {
         reply_markup: { inline_keyboard: [[{ text: '✅ Позначити як виконане', callback_data: `task_action:complete:${taskIdx}` }, { text: '⏸️ Зупинити нагадування', callback_data: `task_action:stop:${taskIdx}` }, { text: '🔁 Нагадувати далі', callback_data: `task_action:keep:${taskIdx}` }]] }
@@ -644,11 +585,11 @@ bot.action(/pick_hour:(\d+):(\d+)/, async (ctx) => {
         ctx.telegram.sendMessage(userId, `🔔 Нагадування: ${getTaskText(task)}\n\nБільше функцій — /help`, {
           reply_markup: { inline_keyboard: [[{ text: '✅ Позначити як виконане', callback_data: `task_action:complete:${taskIdx}` }, { text: '⏸️ Зупинити нагадування', callback_data: `task_action:stop:${taskIdx}` }, { text: '🔁 Нагадувати далі', callback_data: `task_action:keep:${taskIdx}` }]] }
         });
-        // schedule next
-        task.reminderNext = Date.now() + 24 * 60 * 60 * 1000;
       }, 24 * 60 * 60 * 1000);
-    }, msUntil);
-    await ctx.editMessageReplyMarkup();
+  }, msUntil);
+  // store next expected run timestamp for serverless checks
+  task.reminderNext = next.getTime();
+  await ctx.editMessageReplyMarkup();
     await ctx.reply(withFooter(`Таймер щоденно о ${hour.toString().padStart(2, '0')}:00 встановлено.`));
     await ctx.answerCbQuery('Година встановлена');
   } catch (err) {
@@ -666,3 +607,89 @@ module.exports = {
   clearTaskReminder,
   setTaskReminder
 };
+
+// Process due reminders (used by middleware and by external scheduler endpoint)
+async function processDueReminders(ctxParam) {
+  const telegram = (ctxParam && ctxParam.telegram) || bot.telegram;
+  const now = Date.now();
+  // per-task reminders
+  for (const userId of Object.keys(userTasks)) {
+    const user = userTasks[userId];
+    if (!user || !Array.isArray(user.tasks)) continue;
+    for (let i = 0; i < user.tasks.length; i++) {
+      const task = user.tasks[i];
+      if (!task) continue;
+      if (user.completed && user.completed[i]) continue; // skip done
+      if (!task.reminderNext) continue;
+      if (now >= task.reminderNext) {
+        try {
+          await telegram.sendMessage(userId, `🔔 Нагадування: ${getTaskText(task)}\n\nБільше функцій — /help`, {
+            reply_markup: { inline_keyboard: [[{ text: '✅ Позначити як виконане', callback_data: `task_action:complete:${i}` }, { text: '⏸️ Зупинити нагадування', callback_data: `task_action:stop:${i}` }, { text: '🔁 Нагадувати далі', callback_data: `task_action:keep:${i}` }]] }
+          });
+        } catch (e) {
+          console.error('Failed to send due task reminder', e);
+        }
+        // advance next run
+        if (task.reminderInterval) {
+          task.reminderNext = now + task.reminderInterval;
+        } else if (task.reminderSchedule && task.reminderSchedule.type === 'daily_hour') {
+          const next = new Date();
+          next.setHours(task.reminderSchedule.hour, 0, 0, 0);
+          if (next.getTime() <= now) next.setDate(next.getDate() + 1);
+          task.reminderNext = next.getTime();
+        } else {
+          // one-off or unknown — clear
+          delete task.reminderNext;
+        }
+      }
+    }
+  }
+
+  // global user timers
+  for (const uid of Object.keys(userTimers)) {
+    const ut = userTimers[uid];
+    if (!ut || !ut.enabled || !ut.nextRun) continue;
+    if (now >= ut.nextRun) {
+      try {
+        // send compact uncompleted list
+        const lines = [];
+        const user = userTasks[uid];
+        if (user && Array.isArray(user.tasks)) {
+          user.tasks.forEach((t, idx) => {
+            const done = user.completed && user.completed[idx];
+            if (done) return;
+            const marker = t && t.urgent ? EMOJI.urgent : EMOJI.general;
+            lines.push(`${marker} ${idx + 1}. ${getTaskText(t)}`);
+          });
+        }
+        if (lines.length > 0) {
+          await telegram.sendMessage(uid, `🔔 Нагадування (${ut.label || 'таймер'})\n` + lines.join('\n'));
+        }
+      } catch (e) {
+        console.error('Failed to send global timer reminder', e);
+      }
+      // advance nextRun
+      if (ut.schedule && ut.schedule.type === 'daily_hour') {
+        // add one day
+        ut.nextRun = ut.nextRun + 24 * 60 * 60 * 1000;
+      } else if (ut.intervalMs) {
+        ut.nextRun = now + ut.intervalMs;
+      } else {
+        delete ut.nextRun;
+      }
+    }
+  }
+}
+
+// middleware: check due reminders on each incoming update (mitigates serverless timer loss)
+bot.use(async (ctx, next) => {
+  try {
+    await processDueReminders(ctx);
+  } catch (e) {
+    console.error('processDueReminders middleware error', e);
+  }
+  return next();
+});
+
+// export for external scheduler endpoint
+module.exports.processDueReminders = processDueReminders;
