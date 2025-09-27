@@ -1,5 +1,4 @@
 const { kv } = require('@vercel/kv');
-const fetch = require('node-fetch'); // Assuming node-fetch is installed or use built-in fetch if Node 18+
 
 module.exports = async (req, res) => {
   if (req.method !== 'GET') {
