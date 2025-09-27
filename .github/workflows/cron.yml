@@ -1,0 +1,12 @@
+name: Check Reminders
+
+on:
+  schedule:
+    - cron: '*/1 * * * *'  # Runs every minute
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Call reminder endpoint
+        run: curl https://task-planner-bot.vercel.app/api/check-reminders
