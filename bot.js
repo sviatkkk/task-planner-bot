@@ -183,7 +183,6 @@ function clearTaskReminder(task) {
 
 // Список доступних таймінгів
 const timerOptions = [
-  { label: "30 секунд", value: 30 * 1000 },
   { label: "1 хвилина", value: 60 * 1000 },
   { label: "5 хвилин", value: 5 * 60 * 1000 },
   { label: "15 хвилин", value: 15 * 60 * 1000 },

@@ -2,7 +2,7 @@ name: Check Reminders
 
 on:
   schedule:
-    - cron: '*/1 * * * *'  # Runs every minute
+    - cron: '*/5 * * * *'  # Runs every minute
 
 jobs:
   check:
